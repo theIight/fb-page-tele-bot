@@ -46,7 +46,6 @@ async function main() {
     if (!isRunning) return;
     console.log('\n[Shutdown] Đang dừng bot và dọn dẹp tài nguyên...');
     isRunning = false;
-    storage.save();
     await crawler.close();
     console.log('[Shutdown] Tạm biệt! 👋');
     process.exit(0);

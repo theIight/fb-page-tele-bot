@@ -12,7 +12,8 @@
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop fb-tele-bot",
     "pm2:restart": "pm2 restart fb-tele-bot",
-    "pm2:logs": "pm2 logs fb-tele-bot"
+    "pm2:logs": "pm2 logs fb-tele-bot",
+    "reset": "echo '[]' > data/seen_posts.json && echo '✅ Đã xóa sạch lịch sử bài viết.'"
   },
   "keywords": [
     "facebook",

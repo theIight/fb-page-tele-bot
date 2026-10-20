@@ -1,5 +1,21 @@
+import fs from 'fs';
+import path from 'path';
 import { chromium } from 'playwright';
 import { cleanFacebookUrl, extractPostId } from './extractor.js';
+
+function cleanStaleLocks(userDataDir) {
+  try {
+    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+    for (const f of lockFiles) {
+      const p = path.join(userDataDir, f);
+      if (fs.existsSync(p)) {
+        try {
+          fs.unlinkSync(p);
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
 
 export class FacebookCrawler {
   constructor(config) {
@@ -10,6 +26,8 @@ export class FacebookCrawler {
 
   async init() {
     if (this.context) return;
+
+    cleanStaleLocks(this.config.userDataDir);
 
     const launchOptions = {
       headless: this.config.headless,
@@ -106,6 +124,37 @@ export class FacebookCrawler {
     } catch (_) {}
   }
 
+  async expandSeeMore() {
+    try {
+      const clickedCount = await this.page.evaluate(() => {
+        let count = 0;
+        const articles = Array.from(document.querySelectorAll('div[role="article"]'));
+        for (const art of articles) {
+          const candidates = Array.from(art.querySelectorAll('*'));
+          for (const el of candidates) {
+            const text = (el.innerText || '').trim().toLowerCase();
+            const isClickable = el.children.length === 0 || el.getAttribute('role') === 'button';
+            if (isClickable && (text === 'xem thêm' || text === 'see more' || text === '… xem thêm' || text === '… see more')) {
+              try {
+                el.click();
+                count++;
+              } catch (_) {}
+            }
+          }
+        }
+        return count;
+      });
+
+      if (clickedCount > 0) {
+        console.log(`[Crawler] Đã bấm "Xem thêm" cho ${clickedCount} vị trí, chờ DOM cập nhật...`);
+        // Chờ React cập nhật lại DOM hiển thị toàn bộ nội dung
+        await this.page.waitForTimeout(1200);
+      }
+    } catch (err) {
+      console.warn(`[Crawler] Cảnh báo khi bấm Xem thêm:`, err.message);
+    }
+  }
+
   async fetchLatestPosts() {
     await this.init();
 
@@ -131,6 +180,9 @@ export class FacebookCrawler {
       } catch (_) {}
     }
 
+    // Bấm mở rộng toàn bộ "Xem thêm" / "See more" trước khi trích xuất
+    await this.expandSeeMore();
+
     // Extract Page Title
     const pageTitle = await this.page.evaluate(() => {
       const h1 = document.querySelector('h1');
@@ -141,18 +193,6 @@ export class FacebookCrawler {
 
     // Extract Posts inside page context
     const rawPosts = await this.page.evaluate(() => {
-      // Auto-expand "See more" / "Xem thêm"
-      try {
-        const seeMoreButtons = Array.from(document.querySelectorAll('div[role="article"] div[role="button"]'))
-          .filter(el => {
-            const t = (el.innerText || '').trim().toLowerCase();
-            return t === 'see more' || t === 'xem thêm';
-          });
-        for (const btn of seeMoreButtons) {
-          btn.click();
-        }
-      } catch (_) {}
-
       // Identify whether an article is a comment or reply
       const isComment = (art) => {
         const aria = (art.getAttribute('aria-label') || '').toLowerCase();
@@ -227,15 +267,22 @@ export class FacebookCrawler {
             const lower = t.toLowerCase();
             const ignored = [
               'like', 'thích', 'comment', 'bình luận', 'share', 'chia sẻ',
-              'see more', 'xem thêm', 'viết bình luận...', 'write a comment...',
+              'viết bình luận...', 'write a comment...',
               'xem thêm bình luận', 'view more comments'
             ];
             return !ignored.includes(lower);
           });
 
+        // Clean trailing "See less", "Thu gọn", "Ẩn bớt", "… See more"
+        const cleanedNodes = textNodes.map(t => {
+          return t
+            .replace(/\s*(See less|Thu gọn|Xem bớt|Ẩn bớt|…\s*See more|…\s*Xem thêm)$/i, '')
+            .trim();
+        }).filter(Boolean);
+
         // Deduplicate nested elements
         const uniqueTexts = [];
-        for (const t of textNodes) {
+        for (const t of cleanedNodes) {
           if (!uniqueTexts.some(existing => existing.includes(t))) {
             uniqueTexts.push(t);
           }
